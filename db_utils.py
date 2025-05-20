@@ -39,32 +39,28 @@ DB_PASS = _load_password_from_file(DB_PASS_FILE)
 
 def fetch_dvd_rental_data():
     """
-    Connects to the database, fetches film data, and prepares it for AG Grid.
+    Connects to the database and fetches film data.
     Returns:
-        tuple: (rowData, columnDefs, error_message)
+        tuple: (list_of_data_dicts_or_None, error_message_string_or_None)
+               Returns (list_of_dicts, None) on success.
+               Returns ([], None) if no data is found (query successful).
+               Returns (None, error_message_string) on failure.
     """
-    rowData = []
-    columnDefs = []
-    error_message = None
-
     if DB_PASS is None:
         error_message = f"Database password could not be loaded from '{DB_PASS_FILE}'. Please check the file."
         print(error_message)
-        rowData = [{"error_message": error_message}]
-        columnDefs = [{"field": "error_message"}]
-        return rowData, columnDefs, error_message
+        return None, error_message
 
     # Construct SQLAlchemy database URL
     db_url = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     engine = None
     session = None
-
     try:
         engine = create_engine(db_url)
         Session = sessionmaker(bind=engine)
         session = Session()
 
-        # Query using the SQLAlchemy Film model, selecting specific columns
+        # Query using the SQLAlchemy Film model
         query_result = session.query(
             Film.film_id,
             Film.title,
@@ -72,51 +68,19 @@ def fetch_dvd_rental_data():
             Film.release_year,
             Film.rental_rate
         ).order_by(Film.film_id).limit(20).all()
-
-        if not query_result:
-            rowData = [{"message": "No film data found."}]
-            columnDefs = [{"field": "message"}]
-            return rowData, columnDefs, "No film data found."
         
-        # Format data for AG Grid
-        rowData = [dict(row._mapping) for row in query_result]
-
-        # Define columnDefs with pivot capabilities
-        # Base properties like sortable, filter, resizable will be set in defaultColDef in app.py
-        columnDefs = [
-            {"field": "film_id"}, # Gets base properties from defaultColDef
-            {"field": "title", "enableRowGroup": True, "enablePivot": True}, # Allow title to be grouped or pivoted
-            {"field": "description"}, # Standard column
-            {
-                "field": "release_year",
-                "enableRowGroup": True, # Allow this column to be used for row grouping
-                "rowGroup": True,       # Group by release_year by default
-                "filter": "agNumberColumnFilter", # Specify filter type for numeric data
-            },
-            {
-                "field": "rental_rate",
-                "enableValue": True,    # Allow this column for aggregation
-                "aggFunc": "sum",       # Default aggregation function
-                "allowedAggFuncs": ["sum", "avg", "min", "max", "count"], # Specify allowed aggregation functions
-                "filter": "agNumberColumnFilter", # Specify filter type for numeric data
-                # For currency, format the value. Ensure params.value is handled if it could be null/undefined.
-                "valueFormatter": {"function": "params.value == null ? '' : '$' + Number(params.value).toFixed(2)"}
-            }
-        ]
-        # Example: If you wanted to hide the original 'release_year' column after grouping:
-        # columnDefs[3]["hide"] = True 
+        if not query_result:
+            return [], None # No data found, but not an error
+        
+        data = [dict(row._mapping) for row in query_result]
+        return data, None
 
     except sqlalchemy.exc.SQLAlchemyError as e: # Catch SQLAlchemy specific errors
         print(f"Database Error (SQLAlchemy): {e}")
-        error_message = f"Failed to connect to the database or execute query using SQLAlchemy: {e}"
-        rowData = [{"error_message": str(e)}]
-        columnDefs = [{"field": "error_message"}]
+        return None, f"Failed to connect to the database or execute query using SQLAlchemy: {e}"
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
-        error_message = f"An unexpected error occurred: {e}"
-        rowData = [{"error_message": str(e)}]
-        columnDefs = [{"field": "error_message"}]
+        return None, f"An unexpected error occurred: {e}"
     finally:
         if session:
             session.close()
-    return rowData, columnDefs, error_message
