@@ -1,5 +1,5 @@
 import os
-import psycopg2 # Retained for _load_password_from_file, can be removed if that function changes
+import psycopg2 # DBAPI driver for PostgreSQL, used by SQLAlchemy via 'postgresql+psycopg2://' connection string
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import sqlalchemy.exc
@@ -77,16 +77,34 @@ def fetch_dvd_rental_data():
             rowData = [{"message": "No film data found."}]
             columnDefs = [{"field": "message"}]
             return rowData, columnDefs, "No film data found."
-
-        # Define column names based on the selected attributes from the Film model
-        colnames = ["film_id", "title", "description", "release_year", "rental_rate"]
-
+        
         # Format data for AG Grid
-        # query_result contains RowProxy objects which behave like named tuples
-        # Access attributes using ._mapping to get a dictionary
         rowData = [dict(row._mapping) for row in query_result]
 
-        columnDefs = [{"field": col, "sortable": True, "filter": True, "resizable": True} for col in colnames]
+        # Define columnDefs with pivot capabilities
+        # Base properties like sortable, filter, resizable will be set in defaultColDef in app.py
+        columnDefs = [
+            {"field": "film_id"}, # Gets base properties from defaultColDef
+            {"field": "title", "enableRowGroup": True, "enablePivot": True}, # Allow title to be grouped or pivoted
+            {"field": "description"}, # Standard column
+            {
+                "field": "release_year",
+                "enableRowGroup": True, # Allow this column to be used for row grouping
+                "rowGroup": True,       # Group by release_year by default
+                "filter": "agNumberColumnFilter", # Specify filter type for numeric data
+            },
+            {
+                "field": "rental_rate",
+                "enableValue": True,    # Allow this column for aggregation
+                "aggFunc": "sum",       # Default aggregation function
+                "allowedAggFuncs": ["sum", "avg", "min", "max", "count"], # Specify allowed aggregation functions
+                "filter": "agNumberColumnFilter", # Specify filter type for numeric data
+                # For currency, format the value. Ensure params.value is handled if it could be null/undefined.
+                "valueFormatter": {"function": "params.value == null ? '' : '$' + Number(params.value).toFixed(2)"}
+            }
+        ]
+        # Example: If you wanted to hide the original 'release_year' column after grouping:
+        # columnDefs[3]["hide"] = True 
 
     except sqlalchemy.exc.SQLAlchemyError as e: # Catch SQLAlchemy specific errors
         print(f"Database Error (SQLAlchemy): {e}")
