@@ -1,5 +1,9 @@
 import os
-import psycopg2
+import psycopg2 # Retained for _load_password_from_file, can be removed if that function changes
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+import sqlalchemy.exc
+from db_models import Film # Import the Film model from db_models.py
 
 # --- Database Connection Configuration ---
 # For better security, consider using environment variables or a more robust config management.
@@ -50,22 +54,43 @@ def fetch_dvd_rental_data():
         columnDefs = [{"field": "error_message"}]
         return rowData, columnDefs, error_message
 
-    conn_string = f"host='{DB_HOST}' port='{DB_PORT}' dbname='{DB_NAME}' user='{DB_USER}' password='{DB_PASS}'"
+    # Construct SQLAlchemy database URL
+    db_url = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    engine = None
+    session = None
 
     try:
-        conn = psycopg2.connect(conn_string)
-        cursor = conn.cursor()
-        query = "SELECT film_id, title, description, release_year, rental_rate FROM film ORDER BY film_id LIMIT 20;"
-        cursor.execute(query)
-        colnames = [desc[0] for desc in cursor.description]
-        results = cursor.fetchall()
-        rowData = [dict(zip(colnames, row)) for row in results]
+        engine = create_engine(db_url)
+        Session = sessionmaker(bind=engine)
+        session = Session()
+
+        # Query using the SQLAlchemy Film model, selecting specific columns
+        query_result = session.query(
+            Film.film_id,
+            Film.title,
+            Film.description,
+            Film.release_year,
+            Film.rental_rate
+        ).order_by(Film.film_id).limit(20).all()
+
+        if not query_result:
+            rowData = [{"message": "No film data found."}]
+            columnDefs = [{"field": "message"}]
+            return rowData, columnDefs, "No film data found."
+
+        # Define column names based on the selected attributes from the Film model
+        colnames = ["film_id", "title", "description", "release_year", "rental_rate"]
+
+        # Format data for AG Grid
+        # query_result contains RowProxy objects which behave like named tuples
+        # Access attributes using ._mapping to get a dictionary
+        rowData = [dict(row._mapping) for row in query_result]
+
         columnDefs = [{"field": col, "sortable": True, "filter": True, "resizable": True} for col in colnames]
-        cursor.close()
-        conn.close()
-    except psycopg2.Error as e:
-        print(f"Database Error: {e}")
-        error_message = f"Failed to connect to the database or execute query: {e}"
+
+    except sqlalchemy.exc.SQLAlchemyError as e: # Catch SQLAlchemy specific errors
+        print(f"Database Error (SQLAlchemy): {e}")
+        error_message = f"Failed to connect to the database or execute query using SQLAlchemy: {e}"
         rowData = [{"error_message": str(e)}]
         columnDefs = [{"field": "error_message"}]
     except Exception as e:
@@ -73,5 +98,7 @@ def fetch_dvd_rental_data():
         error_message = f"An unexpected error occurred: {e}"
         rowData = [{"error_message": str(e)}]
         columnDefs = [{"field": "error_message"}]
-
+    finally:
+        if session:
+            session.close()
     return rowData, columnDefs, error_message
